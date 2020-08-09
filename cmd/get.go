@@ -17,14 +17,14 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path"
-
 	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox/files"
 	"github.com/dustin/go-humanize"
 	"github.com/mitchellh/ioprogress"
 	"github.com/spf13/cobra"
+	"io"
+	"os"
+	"path"
+	"strings"
 )
 
 type DownloadEntry struct {
@@ -53,33 +53,71 @@ func get(cmd *cobra.Command, args []string) (err error) {
 
 	if !recurse {
 		entries = append(entries, DownloadEntry{
-			path: src,
-			dest: dest,
+			path:        src,
+			destination: dst,
 		})
 	} else {
 		// go through each file
+		dbx := files.New(config)
+		arg := files.NewListFolderArg(src)
+		arg.Recursive = true
+		res, err := dbx.ListFolder(arg)
+		if err != nil {
+			fmt.Println(err)
+			return err
+		} else {
+			var entrs []files.IsMetadata
+			entrs = res.Entries
+			fmt.Printf("Looking through %v entries\n", len(entrs))
+			for _, el := range res.Entries {
+				switch f := el.(type) {
+				case *files.FileMetadata:
+					dest := strings.ReplaceAll(path.Base(f.PathLower), " ", "_")
+					fmt.Println("Adding file", dest)
+					entries = append(entries, DownloadEntry{
+						path:        f.PathLower,
+						destination: dest,
+					})
+				}
+			}
+
+			for res.HasMore {
+				arg := files.NewListFolderContinueArg(res.Cursor)
+
+				res, err = dbx.ListFolderContinue(arg)
+				if err != nil {
+					return err
+				}
+				entrs = append(entrs, res.Entries...)
+
+			}
+		}
 
 	}
 
-	for entry := range entries {
+	fmt.Printf("Goint through %v entries\n", len(entries))
+	for _, entry := range entries {
 		// Default `dst` to the base segment of the source path; use the second argument if provided.
 		// If `dst` is a directory, append the source filename.
+		fmt.Println("Adding to file ", entry.destination)
 		if f, err := os.Stat(dst); err == nil && f.IsDir() {
-			dst = path.Join(dst, path.Base(entry.Path))
+			dst = path.Join(dst, path.Base(entry.destination))
+		} else {
+			dst = entry.destination
 		}
 
 		arg := files.NewDownloadArg(entry.path)
-
+		fmt.Printf("Downloading file to to %v\n", dst)
 		dbx := files.New(config)
 		res, contents, err := dbx.Download(arg)
 		if err != nil {
-			return
+			continue
 		}
 		defer contents.Close()
 
 		f, err := os.Create(dst)
 		if err != nil {
-			return
+			continue
 		}
 		defer f.Close()
 
@@ -93,7 +131,7 @@ func get(cmd *cobra.Command, args []string) (err error) {
 		}
 
 		if _, err = io.Copy(f, progressbar); err != nil {
-			return
+			continue
 		}
 
 	}
@@ -102,7 +140,7 @@ func get(cmd *cobra.Command, args []string) (err error) {
 
 // getCmd represents the get command
 var getCmd = &cobra.Command{
-	Use:   "hi", // "get  [flags] <source> [<target>]",
+	Use:   "get  [flags] <source> [<target>]",
 	Short: "Download a file",
 	RunE:  get,
 }
