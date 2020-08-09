@@ -27,7 +27,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type DownloadEntry struct {
+	path        string
+	destination string
+}
+
 func get(cmd *cobra.Command, args []string) (err error) {
+
 	if len(args) == 0 || len(args) > 2 {
 		return errors.New("`get` requires `src` and/or `dst` arguments")
 	}
@@ -37,54 +43,71 @@ func get(cmd *cobra.Command, args []string) (err error) {
 		return
 	}
 
-	// Default `dst` to the base segment of the source path; use the second argument if provided.
 	dst := path.Base(src)
 	if len(args) == 2 {
 		dst = args[1]
 	}
-	// If `dst` is a directory, append the source filename.
-	if f, err := os.Stat(dst); err == nil && f.IsDir() {
-		dst = path.Join(dst, path.Base(src))
+
+	recurse, _ := cmd.Flags().GetBool("recurse")
+	var entries []DownloadEntry
+
+	if !recurse {
+		entries = append(entries, DownloadEntry{
+			path: src,
+			dest: dest,
+		})
+	} else {
+		// go through each file
+
 	}
 
-	arg := files.NewDownloadArg(src)
+	for entry := range entries {
+		// Default `dst` to the base segment of the source path; use the second argument if provided.
+		// If `dst` is a directory, append the source filename.
+		if f, err := os.Stat(dst); err == nil && f.IsDir() {
+			dst = path.Join(dst, path.Base(entry.Path))
+		}
 
-	dbx := files.New(config)
-	res, contents, err := dbx.Download(arg)
-	if err != nil {
-		return
+		arg := files.NewDownloadArg(entry.path)
+
+		dbx := files.New(config)
+		res, contents, err := dbx.Download(arg)
+		if err != nil {
+			return
+		}
+		defer contents.Close()
+
+		f, err := os.Create(dst)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+
+		progressbar := &ioprogress.Reader{
+			Reader: contents,
+			DrawFunc: ioprogress.DrawTerminalf(os.Stderr, func(progress, total int64) string {
+				return fmt.Sprintf("Downloading %s/%s",
+					humanize.IBytes(uint64(progress)), humanize.IBytes(uint64(total)))
+			}),
+			Size: int64(res.Size),
+		}
+
+		if _, err = io.Copy(f, progressbar); err != nil {
+			return
+		}
+
 	}
-	defer contents.Close()
-
-	f, err := os.Create(dst)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	progressbar := &ioprogress.Reader{
-		Reader: contents,
-		DrawFunc: ioprogress.DrawTerminalf(os.Stderr, func(progress, total int64) string {
-			return fmt.Sprintf("Downloading %s/%s",
-				humanize.IBytes(uint64(progress)), humanize.IBytes(uint64(total)))
-		}),
-		Size: int64(res.Size),
-	}
-
-	if _, err = io.Copy(f, progressbar); err != nil {
-		return
-	}
-
 	return
 }
 
 // getCmd represents the get command
 var getCmd = &cobra.Command{
-	Use:   "get [flags] <source> [<target>]",
+	Use:   "hi", // "get  [flags] <source> [<target>]",
 	Short: "Download a file",
 	RunE:  get,
 }
 
 func init() {
+	getCmd.Flags().BoolP("recurse", "R", false, "Download everything under directory")
 	RootCmd.AddCommand(getCmd)
 }
